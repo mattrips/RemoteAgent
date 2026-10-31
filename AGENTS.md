@@ -49,6 +49,18 @@ conversation libraries. Data is the separate project storage server.
   output recovery journals are not a permanent conversation store and can include
   generated thinking text; treat them as private.
 
+Every generation uses a CPU-only bounded exact-token repetition detector: patterns
+1–512 tokens, at least 12 consecutive repeats AND 128 repeated output tokens.
+Only newly generated tokens are fed, including hidden thinking. A fixed 6,144-token
+ring and early mismatch exits preserve native GPU pipelining. On detection, drain
+GPU work, emit usage, then terminal error repetition_detected with pattern length,
+repeat count and zero-based generated span start; never publish the working cache.
+Existing immutable caches survive (normal pre-inference admission still applies).
+The dashboard/log show Repetition detected, retain counts but no output/token IDs,
+and release the slot normally. RA never silently retries. Decomposer/Ray may make
+one new request using original messages plus their generic nudge; this exception
+requires the explicit terminal repetition error, not network loss or cancellation.
+
 ## Resource management
 
 Verify defaults in shared policies and the worker rather than copying them into
@@ -79,6 +91,10 @@ The dashboard has Status, Log and Settings tabs. Keep model/service status,
 loading bars, memory, inference metrics and manual session eviction on Status;
 connection/model settings, Tailscale and diagnostics belong in Settings. Switching
 tabs must not restart the worker or inference.
+The Inference stage value is green when Idle; the generated-token value is green
+only while Decoding. Other states and completed counts use the primary text color.
+The dashboard uses an explicit white background and light color scheme, matching
+Data, rather than the default gray window background.
 
 `RemoteAgentService/ActivityLog.swift` owns a bounded, memory-only metadata log
 (latest 1,000 entries). WorkerBridge records request queue/start/completion,
@@ -118,3 +134,20 @@ loading a second 397B instance alongside another model process. A compiled build
 or fake-worker pass does not establish real-model memory or offsite reliability.
 Use **Run local checks…** between jobs for deployed-model verification and retain
 the report without exposing its token. Do not commit/push unless requested.
+
+## Server-owned pinned baseline
+
+baseline.status is authenticated service-mirrored metadata, bypassing GPU/queue and
+creating no session. baseline.ensure accepts exactly one complete system message,
+no raw tokens/handle, and only starts when JobGate.tryAcquire succeeds; otherwise
+returns deferred. One current immutable baseline lives outside all session-owned
+snapshots. Exact system bytes/template policy identify it; the loaded worker epoch
+binds weights, tokenizer and template. Derive a safe extendable token prefix using
+two disjoint user probes; never prefill the probe bodies. Automatic matching may
+use the pin only on an exact token prefix, always copying full cache/recurrent
+state and logits. Session closure/expiry/supersession, explicit ordinary-cache
+release and memory/LRU eviction cannot remove it. Count its bytes in retained-cache
+admission; reject work rather than evict it. Complete replacement is atomic and
+size-checked, preserving the old pin on failure. Model changes/unload/worker death
+invalidate it. Inference failures clear ordinary caches but preserve the untouched
+immutable baseline. Metadata/logging must never include system text or tokens.

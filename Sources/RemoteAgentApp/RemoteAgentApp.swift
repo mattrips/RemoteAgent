@@ -8,11 +8,12 @@ import Darwin
 private struct DashboardMetric: View {
     let title: String
     let value: String
-    init(_ title: String, value: String) { self.title = title; self.value = value }
+    var valueColor: Color = .primary
+    init(_ title: String, value: String, valueColor: Color = .primary) { self.title = title; self.value = value; self.valueColor = valueColor }
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(title).foregroundStyle(.secondary).frame(width: 100, alignment: .leading)
-            Text(value).frame(maxWidth: .infinity, alignment: .leading)
+            Text(value).foregroundStyle(valueColor).frame(maxWidth: .infinity, alignment: .leading)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -29,6 +30,7 @@ private struct DashboardMetric: View {
     var activeBytes = 0
     var cacheBytes = 0
     var cacheCount = 0
+    var pinnedCache: RemotePinnedCacheInfo?
     var sessions = 0
     var sessionList: [RemoteSessionInfo] = []
     var activeSessionID: UUID?
@@ -66,6 +68,7 @@ private struct DashboardMetric: View {
             lastSessionRefresh = Date(); await server?.refreshSessionsIfIdle()
         }
         status = await worker.status; activeBytes = await worker.activeBytes; cacheBytes = await worker.cacheBytes; cacheCount = await worker.cacheCount; sessions = await worker.sessionCount
+        pinnedCache = await worker.pinnedCache
         sessionList = await worker.sessions; activeSessionID = await worker.activeSessionID
         sessionEvents = await worker.sessionEvents
         activityRecords = await worker.activityRecords
@@ -216,11 +219,13 @@ private struct DashboardMetric: View {
                     }
                     GroupBox("Inference") {
                         VStack(alignment: .leading, spacing: 6) {
-                            DashboardMetric("Stage", value: workspace.phase)
+                            DashboardMetric("Stage", value: workspace.phase,
+                                            valueColor: workspace.phase == "Idle" ? .green : .primary)
                             DashboardMetric("Elapsed", value: workspace.elapsed)
                             DashboardMetric("Prompt", value: workspace.inputTokens.formatted())
                             DashboardMetric("Reused", value: workspace.reusedTokens.formatted())
-                            DashboardMetric("Generated", value: workspace.generatedTokens.formatted())
+                            DashboardMetric("Generated", value: workspace.generatedTokens.formatted(),
+                                            valueColor: workspace.phase == "Decoding" ? .green : .primary)
                             DashboardMetric(workspace.rateIsLive ? "Speed (live)" : "Last speed", value: workspace.rate)
                                 .help("During generation: average tokens per second since the first streamed token, excluding prompt processing. After completion: the worker’s final generation rate.")
                         }.monospacedDigit().frame(minWidth: 200)
@@ -232,6 +237,8 @@ private struct DashboardMetric: View {
                             DashboardMetric("Active", value: workspace.activeSessionID == nil ? "0" : "1")
                             DashboardMetric("Snapshots", value: workspace.cacheCount.formatted())
                                 .help("Retention is governed primarily by the cache memory budget; a high metadata ceiling is a secondary safeguard.")
+                            DashboardMetric("Pinned base", value: workspace.pinnedCache.map { "\($0.tokenCount.formatted()) tokens · " + RemoteWorkspace.bytes($0.bytes) } ?? "Not prepared")
+                                .help("Server-owned immutable baseline. Included in cache memory; preserved across session closure and ordinary eviction until replaced or the model unloads.")
                             DashboardMetric("Last prefill", value: workspace.prefill)
                         }.monospacedDigit().frame(minWidth: 200)
                     }
@@ -293,6 +300,9 @@ private struct DashboardMetric: View {
                     }
                 }
             }.padding(24).frame(minWidth: 820, minHeight: 480)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color.white)
+            .preferredColorScheme(.light)
             .confirmationDialog("Close this session and release its caches?", isPresented: Binding(get: { workspace.sessionToClose != nil }, set: { if !$0 { workspace.sessionToClose = nil } })) {
                 Button("Close session", role: .destructive) { workspace.closeSelectedSession() }
             } message: { Text("The client must create a new session when it next connects. Saved conversations and project files are not deleted.") }

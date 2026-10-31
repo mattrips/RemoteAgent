@@ -23,7 +23,7 @@ public struct RemoteActivityRecord: Sendable, Identifiable {
 struct RemoteActivityLog {
     static let capacity = 1000
     private(set) var records: [RemoteActivityRecord] = []
-    private static let requests: Set<String> = ["generate", "tokenize", "cache.prefill", "cache.append", "cache.fork", "verify"]
+    private static let requests: Set<String> = ["generate", "tokenize", "cache.prefill", "cache.append", "cache.fork", "verify", "baseline.ensure"]
     static func label(_ text: String, limit: Int = 100) -> String {
         String(text.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }.prefix(limit))
     }
@@ -50,12 +50,15 @@ struct RemoteActivityLog {
         if let value = event.reusedTokens ?? event.usage?.reusedInputTokens { records[i].reusedTokens = value }
         if let value = event.generatedTokens ?? event.usage?.outputTokens { records[i].generatedTokens = value }
         guard event.terminal else { return }
-        let state = event.kind == "error" ? (event.errorCode == "cancelled" ? "Cancelled" : "Failed") : "Complete"
+        let state = event.kind == "error" ? (event.errorCode == "cancelled" ? "Cancelled" : event.errorCode == RepetitionDetectionError.code ? "Repetition detected" : "Failed") : "Complete"
         let duplicate = records[i].endedAt != nil && records[i].status == state && records[i].errorCode == event.errorCode
         records[i].status = state; records[i].endedAt = at; records[i].errorCode = event.errorCode.map { Self.label($0, limit: 64) }
         if event.kind == "error", !duplicate, event.errorCode != "cancelled" {
             let request = records[i]
-            add(category: "Error", client: request.client, operation: request.operation, status: "Failed", requestID: request.requestID, sessionID: request.sessionID, errorCode: request.errorCode, detail: "Request failed; inspect the caller's diagnostic for details.", at: at)
+            let detail = event.errorCode == RepetitionDetectionError.code && event.repetition?.valid == true
+                ? "Exact consecutive repetition: \(event.repetition!.patternTokens)-token block × \(event.repetition!.repetitions); no result committed."
+                : "Request failed; inspect the caller's diagnostic for details."
+            add(category: "Error", client: request.client, operation: request.operation, status: state, requestID: request.requestID, sessionID: request.sessionID, errorCode: request.errorCode, detail: detail, at: at)
         }
     }
     mutating func sessionsChanged(from old: [RemoteSessionInfo], to new: [RemoteSessionInfo], at: Date = Date()) {

@@ -31,7 +31,11 @@ actor Host {
                 let admissionOnly = message.hasPrefix("memory_admission:")
                 let invalidates = !admissionOnly && ["MLX Error", "METAL", "memory_pressure"].contains { message.contains($0) }
                 if invalidates { await model.invalidateCaches() }
-                output.send(.failure(request.id, code: error is CancellationError ? "cancelled" : admissionOnly ? "memory_admission" : "inference_failed", message: message + " No result was committed." + (invalidates ? " Cache handles were invalidated." : admissionOnly ? " No new inference state was created; snapshots may have been evicted for headroom." : " Existing immutable caches are unchanged."), retryable: false))
+                let repetition = error as? RepetitionDetectionError
+                var failure = RemoteAgentEvent.failure(request.id, code: repetition != nil ? RepetitionDetectionError.code : error is CancellationError ? "cancelled" : admissionOnly ? "memory_admission" : "inference_failed", message: message + " No result was committed." + (invalidates ? " Cache handles were invalidated." : admissionOnly ? " No new inference state was created; snapshots may have been evicted for headroom." : " Existing immutable caches are unchanged."), retryable: false)
+                failure.repetition = repetition?.match; failure.usage = repetition?.usage
+                failure.pinStateKnown = true; failure.pinnedCache = await model.pinnedCacheInfo
+                output.send(failure)
             }
             self.finished(request.id)
         }

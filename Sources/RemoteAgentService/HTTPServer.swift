@@ -132,6 +132,29 @@ private final class RPCHandler: ChannelInboundHandler, @unchecked Sendable {
                     switch request.operation {
                     case "capabilities":
                         var event = RemoteAgentEvent("capabilities", requestID: request.id); event.capabilities = .init(); event.terminal = true; self.send(event, channel: channel)
+                    case "baseline.status":
+                        // The bridge mirrors immutable pin metadata. This probe
+                        // never takes the GPU gate or creates a session.
+                        var event = RemoteAgentEvent("result", requestID: request.id)
+                        event.epoch = await worker.epoch; event.pinnedCache = await worker.pinnedCache
+                        event.pinStateKnown = true; event.terminal = true
+                        self.send(event, channel: channel)
+                    case "baseline.ensure":
+                        // Opportunistic background work must never join the
+                        // inference queue. Ray retries at its next check.
+                        if await gate.tryAcquire() {
+                            do {
+                                for try await event in try await worker.stream(request) {
+                                    try Task.checkCancellation(); self.send(event, channel: channel)
+                                }
+                                await gate.release()
+                            } catch { await gate.release(); throw error }
+                        } else {
+                            var event = RemoteAgentEvent("result", requestID: request.id)
+                            event.text = "deferred"; event.epoch = await worker.epoch
+                            event.pinnedCache = await worker.pinnedCache; event.pinStateKnown = true
+                            event.terminal = true; self.send(event, channel: channel)
+                        }
                     case "background.get":
                         let snapshot = try BackgroundPublication.read(directory: backgroundDirectory)
                         var event = RemoteAgentEvent("background", requestID: request.id)

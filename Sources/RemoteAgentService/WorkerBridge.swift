@@ -35,6 +35,7 @@ public actor WorkerBridge {
     public private(set) var activeBytes = 0
     public private(set) var cacheBytes = 0
     public private(set) var cacheCount = 0
+    public private(set) var pinnedCache: RemotePinnedCacheInfo?
     public private(set) var sessionCount = 0
     public private(set) var sessions: [RemoteSessionInfo] = []
     public private(set) var activeSessionID: UUID?
@@ -108,7 +109,7 @@ public actor WorkerBridge {
         activity.sessionsChanged(from: sessions, to: [])
         reader?.cancel(); reader = nil
         try? input?.close(); try? output?.close(); input = nil; output = nil; process = nil
-        configuration = nil; epoch = nil; buffer = Data()
+        configuration = nil; epoch = nil; buffer = Data(); pinnedCache = nil
         activeBytes = 0; cacheBytes = 0; cacheCount = 0; sessionCount = 0; sessions = []; activeSessionID = nil; requestStartedAt = nil
         liveDecodeRate = LiveDecodeRate()
         lastRequestOutcome = nil
@@ -135,6 +136,7 @@ public actor WorkerBridge {
             if let value = event.activeBytes { activeBytes = value }
             if let value = event.cacheBytes { cacheBytes = value }
             if let value = event.cacheCount { cacheCount = value }
+            if event.pinStateKnown == true { pinnedCache = event.pinnedCache }
             if let value = event.sessionCount { sessionCount = value }
             if let value = event.sessions { activity.sessionsChanged(from: sessions, to: value); sessions = value }
             if let value = event.sessionEvents { sessionEvents = Array((sessionEvents + value).suffix(10)) }
@@ -161,7 +163,7 @@ public actor WorkerBridge {
                     let wasCancelling = cancelling.remove(event.requestID) != nil
                     pendingOperations.removeValue(forKey: event.requestID)
                     pending.removeValue(forKey: event.requestID)?.finish(); deadlines.removeValue(forKey: event.requestID)?.cancel(); requestStartedAt = nil; activeSessionID = nil
-                    if event.kind == "error" { lastRequestOutcome = event.errorCode == "cancelled" ? "Cancelled" : "Failed" }
+                    if event.kind == "error" { lastRequestOutcome = event.errorCode == "cancelled" ? "Cancelled" : event.errorCode == RepetitionDetectionError.code ? "Repetition detected" : "Failed" }
                     else if wasCancelling { lastRequestOutcome = "Completed before cancellation" }
                 }
             } else if event.terminal, cancelling.remove(event.requestID) != nil {
