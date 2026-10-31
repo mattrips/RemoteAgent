@@ -4,6 +4,7 @@ import Observation
 import RemoteAgentService
 import HarnessCore
 import Darwin
+import ServiceKit
 
 private struct DashboardMetric: View {
     let title: String
@@ -62,12 +63,13 @@ private struct DashboardMetric: View {
     var testing = false
     var automaticTestStarted = false
     private var startupHandled = false
+    @ObservationIgnored private let startupRecovery = StartupRecovery()
     static func bytes(_ value: Int) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .memory) }
     func poll() async {
         if Date().timeIntervalSince(lastSessionRefresh) > 10 {
             lastSessionRefresh = Date(); await server?.refreshSessionsIfIdle()
         }
-        status = await worker.status; activeBytes = await worker.activeBytes; cacheBytes = await worker.cacheBytes; cacheCount = await worker.cacheCount; sessions = await worker.sessionCount
+        if !starting || running { status = await worker.status }; activeBytes = await worker.activeBytes; cacheBytes = await worker.cacheBytes; cacheCount = await worker.cacheCount; sessions = await worker.sessionCount
         pinnedCache = await worker.pinnedCache
         sessionList = await worker.sessions; activeSessionID = await worker.activeSessionID
         sessionEvents = await worker.sessionEvents
@@ -111,33 +113,64 @@ private struct DashboardMetric: View {
         if !CommandLine.arguments.contains("--no-autoload") { start() }
     }
     func start() {
-        guard !starting, !running else { return }; starting = true
+        guard !running, !startupRecovery.isActive else { return }
+        starting = true
+        startupRecovery.start(attempt: { [self] in try await startAttempt() }, failed: { [self] count, delay, error in
+            status = "Retrying startup"
+            notice = "Startup attempt \(count) failed: \(error.localizedDescription) Retrying in \(Int(delay)) seconds. Stop and unload cancels retries."
+            Task { await worker.recordServiceError("startup_retry_scheduled") }
+        }, finished: { [self] in
+            starting = false
+            if !running { status = "Stopped"; notice = "" }
+        })
+    }
+    private func startAttempt() async throws {
+        try Task.checkCancellation()
         loadingMemoryProgress = ModelLoadMemoryProgress.applies(to: URL(fileURLWithPath: path))
             ? .init(startingUsed: (try? SystemMemorySnapshot.read())?.used) : nil
-        Task {
-            do {
-                let modelURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-                guard FileManager.default.fileExists(atPath: modelURL.appendingPathComponent("config.json").path) else {
-                    throw HarnessError.state("Model directory is unavailable or missing config.json. Choose a local model directory, then load again.")
+        var service: HTTPServer?
+        do {
+            let modelURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: modelURL.appendingPathComponent("config.json").path) else {
+                throw HarnessError.state("Model directory is unavailable or missing config.json. Choose a local model directory.")
+            }
+            let key = try Credentials.loadOrCreate(); token = key
+            try Task.checkCancellation()
+            let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/RemoteAgentWorker")
+            let adjacent = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("RemoteAgentWorker")
+            let helper = FileManager.default.isExecutableFile(atPath: executable.path) ? executable : adjacent
+            guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw HarnessError.state("RemoteAgentWorker helper is missing. Build the RemoteAgent Xcode scheme.") }
+            let next = HTTPServer(worker: worker, secret: key, backgroundDirectory: URL(fileURLWithPath: (backgroundPath as NSString).expandingTildeInPath))
+            service = next
+            try await next.start()
+            try Task.checkCancellation()
+            try await worker.start(executable: helper, model: modelURL)
+            server = next; running = true; loadStarted = Date()
+            UserDefaults.standard.set(path, forKey: "modelPath"); notice = ""
+            while await worker.configuration == nil {
+                try Task.checkCancellation()
+                if await !worker.startupInProgress {
+                    // Configuration can arrive between the two actor reads.
+                    // Do not mistake that successful transition for load failure.
+                    if await worker.configuration != nil { break }
+                    throw HarnessError.state(await worker.status)
                 }
-                let key = try Credentials.loadOrCreate(); token = key
-                let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/RemoteAgentWorker")
-                let adjacent = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("RemoteAgentWorker")
-                let helper = FileManager.default.isExecutableFile(atPath: executable.path) ? executable : adjacent
-                guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw HarnessError.state("RemoteAgentWorker helper is missing. Build the RemoteAgent Xcode scheme, which embeds its worker.") }
-                let service = HTTPServer(worker: worker, secret: key, backgroundDirectory: URL(fileURLWithPath: (backgroundPath as NSString).expandingTildeInPath))
-                try await service.start()
-                do { try await worker.start(executable: helper, model: modelURL) }
-                catch { await service.stop(); throw error }
-                server = service; running = true; loadStarted = Date(); UserDefaults.standard.set(path, forKey: "modelPath")
-                notice = ""
-            } catch { await worker.recordServiceError("startup_failed"); status = "Needs attention"; notice = error.localizedDescription; loadingMemoryProgress = nil; loadStarted = nil }
-            starting = false
+                try await Task.sleep(for: .milliseconds(500))
+            }
+            try Task.checkCancellation()
+            loadStarted = nil; loadingMemoryProgress = nil
+        } catch {
+            await worker.stop()
+            await service?.stop()
+            server = nil; running = false; loadingMemoryProgress = nil; loadStarted = nil
+            throw error
         }
     }
     func stop() {
+        if startupRecovery.isActive { startupRecovery.cancel(); notice = "Stopping startup…"; return }
+        guard !starting else { return }
         starting = true
-        Task { await worker.stop(); await server?.stop(); server = nil; running = false; starting = false; status = "Stopped"; loadStarted = nil; loadingMemoryProgress = nil }
+        Task { await worker.stop(); await server?.stop(); server = nil; running = false; starting = false; status = "Stopped"; notice = ""; loadStarted = nil; loadingMemoryProgress = nil }
     }
     func copyToken() { guard let token else { return }; NSPasteboard.general.clearContents(); NSPasteboard.general.setString(token, forType: .string); notice = "Access token copied. Paste it into Decomposer Settings → RemoteAgent." }
     func closeSelectedSession() {
@@ -178,8 +211,8 @@ private struct DashboardMetric: View {
                     Label("RemoteAgent", systemImage: "server.rack").font(.largeTitle.bold())
                     Spacer()
                     Text(workspace.status).font(.headline).textSelection(.enabled)
-                    if workspace.running {
-                        Button("Stop and unload") { workspace.stop() }.disabled(workspace.starting)
+                    if workspace.running || workspace.starting {
+                        Button("Stop and unload") { workspace.stop() }
                     } else {
                         Button(workspace.starting ? "Starting…" : "Load model and start") { workspace.start() }.disabled(workspace.starting)
                     }

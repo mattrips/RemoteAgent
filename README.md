@@ -93,7 +93,7 @@ token counts, prefill time, generated token counts and generation speed.
   instance replaces the previous instance on that device, cancelling its queued
   jobs; multiple sessions in the same instance remain valid. Replaced instances
   cannot silently reconnect and evict the new owner during the worker epoch.
-- Retained-cache ceiling min(8 GiB, RAM/32), with earlier eviction to reserve an
+- Retained-cache ceiling min(32 GiB, RAM/8), with earlier eviction to reserve an
   independent working cache and 4 GiB GPU workspace for the incoming request.
   Fair per-session LRU remains, with a secondary 256-snapshot metadata ceiling.
 - MLX allocations capped below physical RAM with an OS reserve. Admission estimates

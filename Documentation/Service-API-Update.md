@@ -6,7 +6,7 @@ write tools or server-side conversation library are added.
 
 ## Memory and sessions
 
-Retained snapshots have a ceiling of min(8 GiB, physical RAM/32). Incoming inference
+Retained snapshots have a ceiling of min(32 GiB, physical RAM/8). Incoming inference
 reserves the complete independent working cache, the reply allowance, and 4 GiB
 of GPU workspace before immutable cache references are copied. Idle snapshots are
 evicted first when headroom is inadequate; explicit selected handles are protected.

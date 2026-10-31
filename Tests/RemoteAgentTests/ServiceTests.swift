@@ -77,6 +77,7 @@ for line in sys.stdin:
             throw HarnessError.state("Fake worker did not become ready")
         }
         try await start()
+        #expect(await worker.startupInProgress == false)
         var request = RemoteAgentRequest("session.create")
         var succeeded = false
         for try await event in try await worker.stream(request) { succeeded = event.terminal }

@@ -70,7 +70,10 @@ oldest eligible idle replacement at the cap, and explicit manual closure. Protec
 active/queued work. A new app instance on the same device supersedes the old
 instance's sessions; independent workflows in the same instance remain separate.
 
-Retained caches are size-governed, with a separate metadata cap. Admission reserves
+Retained caches are size-governed, with a separate metadata cap. The ceiling is
+min(32 GiB, physical RAM/8), giving the 256 GiB Mac Studio 32 GiB. This is a ceiling,
+not preallocation or guaranteed residency; earlier headroom reclamation still
+applies. Admission reserves
 an independent working cache for prompt plus reply and GPU workspace. The current
 OS reserve is 4 GiB; GPU workspace is a separate 4 GiB allowance. A failed initial
 check waits two seconds and retries once before eligible snapshot reclamation;
@@ -151,3 +154,17 @@ admission; reject work rather than evict it. Complete replacement is atomic and
 size-checked, preserving the old pin on failure. Model changes/unload/worker death
 invalidate it. Inference failures clear ordinary caches but preserve the untouched
 immutable baseline. Metadata/logging must never include system text or tokens.
+
+## Startup recovery
+
+ServiceKit StartupRecovery retries failed startup indefinitely at 5/10/20/40/60
+seconds, capped at one minute. A single owned task coalesces duplicate launches;
+Stop cancels retries and cancellation must drain before another start. Clean up
+failed listeners/helpers before retry. RA readiness includes complete model load,
+not merely launching its worker; Data recoveryRequired is an already-running
+repository needing exact transaction recovery, not permission to restart or replay
+writes. Orchestrator retries upstream identity/bootstrap failures. Retriever retries
+its service/store initialization, never interrupted paid captures. Show the last
+startup error, attempt and next delay. Preserve autostart opt-outs and manual Stop.
+This policy does not retry accepted inference, retrieval, writes or runtime job
+errors, and does not bypass Keychain, FileVault or macOS login.

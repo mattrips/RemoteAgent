@@ -68,6 +68,7 @@ public actor WorkerBridge {
     public func recordServiceError(_ code: String) { activity.add(category: "Error", operation: "service", status: "Failed", errorCode: code) }
     public func recordTransportDrop(_ id: UUID) { activity.add(category: "Connection", client: "HTTP client", operation: "transport", status: "Dropped", requestID: id, detail: "Transport closed before its response completed. Inference may continue; recover using the original request ID.") }
     public init() {}
+    public var startupInProgress: Bool { configuration == nil && status == "Loading model…" && process?.isRunning == true }
     public func hasPending(_ id: UUID) -> Bool { pending[id] != nil }
     public func start(executable: URL, model: URL) throws {
         guard process == nil else { throw HarnessError.state("Stop the existing worker before loading another model") }
