@@ -33,9 +33,10 @@ public actor RequestCoordinator {
                         try Task.checkCancellation()
                         emit(try await journal.append(event))
                     }
+                    await worker.cancelAndDrain(request.id)
                     await gate.release()
                 } catch {
-                    if acquired { await worker.cancel(request.id); await gate.release() }
+                    if acquired { await worker.cancelAndDrain(request.id); await gate.release() }
                     let cancellation = error is CancellationError || error.localizedDescription.lowercased().contains("cancelled")
                     await worker.recordRequestFailure(request, code: cancellation ? "cancelled" : "service_failed")
                     let failure = RemoteAgentEvent.failure(request.id, code: cancellation ? "cancelled" : "service_failed", message: error.localizedDescription)

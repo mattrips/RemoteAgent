@@ -6,13 +6,11 @@ public enum BackgroundPublication {
     public static var defaultDirectory: URL { EventualityPaths.defaultRoot.appendingPathComponent("Background Prompt", isDirectory: true) }
     public static func read(directory: URL) throws -> RemoteBackgroundSnapshot {
         let root = directory.resolvingSymlinksInPath().standardizedFileURL
-        let preferred = ["Identity.txt", "ProjectIntro.txt", "GlossarySquibs.md", "Notation.txt", "VerbFunctionExamples.tsv"]
         func files() throws -> [URL] {
             try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey])
                 .filter { !$0.lastPathComponent.hasPrefix(".") && ["txt", "md", "tsv", "yaml", "json"].contains($0.pathExtension.lowercased()) }
                 .sorted { a, b in
-                    let ai = preferred.firstIndex(of: a.lastPathComponent) ?? preferred.count, bi = preferred.firstIndex(of: b.lastPathComponent) ?? preferred.count
-                    return ai == bi ? a.lastPathComponent < b.lastPathComponent : ai < bi
+                    BackgroundSnapshot.documentPrecedes(a.lastPathComponent, b.lastPathComponent)
                 }
         }
         let paths = try files()

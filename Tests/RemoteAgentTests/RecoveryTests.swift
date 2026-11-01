@@ -60,6 +60,13 @@ import HarnessCore
         var token = RemoteAgentEvent("token", requestID: new.id); token.text = String(repeating: "x", count: 3000)
         await #expect(throws: Error.self) { _ = try await journal.append(token) }
     }
+    @Test func recentEventsPublicationFollowsEveryOtherBackgroundDocument() throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        try "Latest".write(to: root.appendingPathComponent(RecentEvents.filename), atomically: true, encoding: .utf8)
+        try "Other".write(to: root.appendingPathComponent("Z-Other.txt"), atomically: true, encoding: .utf8)
+        try "Identity".write(to: root.appendingPathComponent("Identity.txt"), atomically: true, encoding: .utf8)
+        #expect(try BackgroundPublication.read(directory: root).documents.map(\.filename) == ["Identity.txt", "Z-Other.txt", RecentEvents.filename])
+    }
     @Test func backgroundPublicationOrdersHashesAndRefusesEscapingSymlinks() throws {
         let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
         try "R(MOVE)".write(to: root.appendingPathComponent("VerbFunctionExamples.tsv"), atomically: true, encoding: .utf8)

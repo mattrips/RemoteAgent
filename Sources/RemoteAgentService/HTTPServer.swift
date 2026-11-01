@@ -58,20 +58,23 @@ public final class HTTPServer: @unchecked Sendable {
     public func queuedSessions() async -> [UUID: Int] { await gate.queuedSessions() }
     public func refreshSessionsIfIdle() async {
         guard await gate.tryAcquire() else { return }
-        do { for try await _ in try await worker.stream(.init("status")) { } } catch { }
+        let request = RemoteAgentRequest("status")
+        do { for try await _ in try await worker.stream(request) { } } catch { }
+        await worker.cancelAndDrain(request.id)
         await gate.release()
     }
     public func closeIdleSession(_ id: UUID) async throws {
         let ticket = UUID()
         try await gate.acquire(ticket)
+        var request = RemoteAgentRequest("session.close"); request.sessionID = id
         do {
             guard await gate.queuedSessions()[id] == nil else { throw HarnessError.state("This session has queued work; cancel it before closing the session") }
-            var request = RemoteAgentRequest("session.close"); request.sessionID = id
             for try await event in try await worker.stream(request) {
                 if event.kind == "error" { throw HarnessError.state(event.text ?? "Could not close session") }
             }
+            await worker.cancelAndDrain(request.id)
             await gate.release()
-        } catch { await gate.release(); throw error }
+        } catch { await worker.cancelAndDrain(request.id); await gate.release(); throw error }
     }
     public func queueCount() async -> Int { await gate.count() }
     public static func authorized(_ header: String?, secret: String) -> Bool { ServiceCredentials.authorized(header, secret: secret) }
@@ -127,11 +130,16 @@ private final class RPCHandler: ChannelInboundHandler, @unchecked Sendable {
             channel.writeAndFlush(HTTPServerResponsePart.head(.init(version: .http1_1, status: .ok, headers: headers)), promise: nil)
             task = Task { [worker, gate, coordinator, backgroundDirectory] in
                 let heartbeat = Task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); if !Task.isCancelled { var event = RemoteAgentEvent("heartbeat", requestID: request.id); event.text = "Waiting or processing"; self.send(event, channel: channel) } } }
-                defer { heartbeat.cancel() }
+                defer {
+                    heartbeat.cancel()
+                    channel.eventLoop.execute { self.completed = true; channel.writeAndFlush(HTTPServerResponsePart.end(nil)).whenComplete { _ in channel.close(promise: nil) } }
+                }
                 do {
                     switch request.operation {
                     case "capabilities":
-                        var event = RemoteAgentEvent("capabilities", requestID: request.id); event.capabilities = .init(); event.terminal = true; self.send(event, channel: channel)
+                        var capabilities = RemoteAgentCapabilities()
+                        capabilities.hostThermal = .current()
+                        var event = RemoteAgentEvent("capabilities", requestID: request.id); event.capabilities = capabilities; event.terminal = true; self.send(event, channel: channel)
                     case "baseline.status":
                         // The bridge mirrors immutable pin metadata. This probe
                         // never takes the GPU gate or creates a session.
@@ -147,8 +155,9 @@ private final class RPCHandler: ChannelInboundHandler, @unchecked Sendable {
                                 for try await event in try await worker.stream(request) {
                                     try Task.checkCancellation(); self.send(event, channel: channel)
                                 }
+                                await worker.cancelAndDrain(request.id)
                                 await gate.release()
-                            } catch { await gate.release(); throw error }
+                            } catch { await worker.cancelAndDrain(request.id); await gate.release(); throw error }
                         } else {
                             var event = RemoteAgentEvent("result", requestID: request.id)
                             event.text = "deferred"; event.epoch = await worker.epoch
@@ -175,8 +184,14 @@ private final class RPCHandler: ChannelInboundHandler, @unchecked Sendable {
                     case "generate":
                         await coordinator.run(request) { event in self.send(event, channel: channel) }
                     default:
-                        var queued = RemoteAgentEvent("requestState", requestID: request.id); queued.text = "queued"; self.send(queued, channel: channel)
-                        try await gate.acquire(request.id, sessionID: request.sessionID, operation: request.operation)
+                        if request.opportunistic != true { var queued = RemoteAgentEvent("requestState", requestID: request.id); queued.text = "queued"; self.send(queued, channel: channel) }
+                        if request.opportunistic == true {
+                            guard await gate.tryAcquire() else {
+                                var deferred = RemoteAgentEvent("result", requestID: request.id)
+                                deferred.text = "deferred"; deferred.epoch = await worker.epoch; deferred.terminal = true
+                                self.send(deferred, channel: channel); return
+                            }
+                        } else { try await gate.acquire(request.id, sessionID: request.sessionID, operation: request.operation) }
                         do {
                             try Task.checkCancellation()
                             var running = RemoteAgentEvent("requestState", requestID: request.id); running.text = "running"; self.send(running, channel: channel)
@@ -188,11 +203,11 @@ private final class RPCHandler: ChannelInboundHandler, @unchecked Sendable {
                             workerRequest.protectedSessionIDs = Array(await gate.queuedSessions().keys)
                             let stream = try await worker.stream(workerRequest)
                             for try await event in stream { try Task.checkCancellation(); self.send(event, channel: channel) }
+                            await worker.cancelAndDrain(request.id)
                             await gate.release()
-                        } catch { await gate.release(); throw error }
+                        } catch { await worker.cancelAndDrain(request.id); await gate.release(); throw error }
                     }
                 } catch { await worker.recordRequestFailure(request, code: "service_failed"); self.send(.failure(request.id, code: "service_failed", message: error.localizedDescription, retryable: false), channel: channel) }
-                channel.eventLoop.execute { self.completed = true; channel.writeAndFlush(HTTPServerResponsePart.end(nil)).whenComplete { _ in channel.close(promise: nil) } }
             }
         }
     }

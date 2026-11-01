@@ -44,6 +44,13 @@ conversation libraries. Data is the separate project storage server.
   plus usage is required for completion. Heartbeats prove liveness, not progress.
   Slow-consumer handling must not silently discard output. Cancellation requested
   is different from cancellation confirmed; completion can win the race.
+- All GPU gate owners call WorkerBridge.cancelAndDrain before releasing their
+  slot, including normal stream exits (AsyncThrowingStream cancellation can end
+  iteration without throwing). Drain waits independently of caller cancellation
+  for a worker terminal event or isolation-watchdog cleanup. Never hand the slot
+  to another request merely because cancellation was sent or HTTP disconnected.
+  Cover generation, prefill/pinned-baseline preparation, metadata refresh and
+  manual session closure; queued cancellation must not cancel another request.
 - Recovery/idempotency is capability-specific. Never blindly regenerate after a
   lost connection; inspect the original request/receipt where supported. Temporary
   output recovery journals are not a permanent conversation store and can include
@@ -168,3 +175,52 @@ its service/store initialization, never interrupted paid captures. Show the last
 startup error, attempt and next delay. Preserve autostart opt-outs and manual Stop.
 This policy does not retry accepted inference, retrieval, writes or runtime job
 errors, and does not bypass Keychain, FileVault or macOS login.
+
+## Window placement
+
+ServiceKit WindowFrameMemory saves each dashboard’s windowed frame in app-local
+UserDefaults (ServiceKit.WindowPlacement.<app>.dashboard), with a ColorSync display
+UUID and prior visible-screen bounds. SwiftUI roots use rememberWindowFrame;
+Retriever retains the native controller before showing its window. Restore once
+per window, not on each update/tab change. Save move/resize changes with a 250 ms
+debounce, flush on close/quit, and exclude minimized/full-screen geometry.
+Disconnected/rearranged/resized displays use bounded visible fallback placement.
+Keep preferences separate from project files and service startup/session state.
+
+
+## Opportunistic conversation preparation and count-only tokenization (2026-10-31)
+
+RemoteAgentRequest.opportunistic is optional and valid only on configuration,
+session.create, tokenize, cache.inspect and cache.prefill. HTTP admission uses
+JobGate.tryAcquire and returns a terminal result with text=deferred when occupied;
+never enqueue this optimization. Terminate the HTTP response even on deferral.
+Normal calls keep existing admission, memory, prefix and cancellation policies.
+Capabilities advertises opportunisticCachePreparation and tokenCountsWithoutAdmission.
+RemoteAgentRequest.countOnly is optional and valid only for tokenize: return exact
+inputTokens without a token array, cache allocation or generation-capacity check.
+Keep bounded input validation; normal tokenization/prefill/generation still enforce
+capacity. This permits measurement before bounded compaction of oversized histories.
+RA owns only cache state; it neither compacts nor persists dialogue. Ready status
+in the host dashboard is native green, while other status styling is unchanged.
+
+
+Background document ordering uses HarnessCore BackgroundSnapshot.documentPrecedes: RecentEvents.txt is always last, including after unlisted extra documents. Keep exact snapshot bytes and hashes. Data's ordinary generic documentation transaction can include Decomposer's mechanically prepared RecentEvents append; it adds no server-side approval or custom write endpoint.
+
+
+## Application-owned service lifetime (2026-10-31)
+
+NSApplicationDelegate.applicationDidFinishLaunching starts the shared ServiceKit
+ApplicationServiceLifetime, with one app-owned controller and poll loop. Never
+attach service startup/monitoring or Stop to view tasks, onAppear/onDisappear,
+window minimization or closure. Closing the last window leaves the app running.
+Explicit Stop remains authoritative; monitor ticks never undo it. Quit returns
+terminateLater, cancels/drains startup and monitoring, stops helpers, then replies.
+The ProcessInfo activity prevents App Nap delays while allowing system sleep;
+this does not bypass login/FileVault or prevent sleep. Data daily Git checks run
+in this app-owned loop, independent of its dashboard. Keep window geometry and
+visibility separate from service state.
+
+
+## Host thermal status
+
+The authenticated capabilities response includes optional hostThermal {state, sampledAt}, sampled from ProcessInfo.processInfo.thermalState in the RemoteAgent service process. States are nominal, fair, serious, critical or unknown. This is OS thermal pressure, not temperature, fan RPM or proof of throttling. Sampling never enters the GPU gate, creates sessions/caches or changes workload policy. Missing telemetry from an older server and unreachable-server readings must display unavailable rather than nominal. Decomposer uses its existing visible-only 10-second Server Status polling and clears old samples on failure. Optional fields preserve older client/worker interoperability.

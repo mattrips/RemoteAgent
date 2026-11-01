@@ -6,6 +6,10 @@ import HarnessCore
 import Darwin
 import ServiceKit
 
+@MainActor private enum DashboardArtwork {
+    static let icon: NSImage? = Bundle.main.url(forResource: "RemoteAgent", withExtension: "icns").flatMap { NSImage(contentsOf: $0) }
+}
+
 private struct DashboardMetric: View {
     let title: String
     let value: String
@@ -64,6 +68,7 @@ private struct DashboardMetric: View {
     var automaticTestStarted = false
     private var startupHandled = false
     @ObservationIgnored private let startupRecovery = StartupRecovery()
+    @ObservationIgnored private var stopTask: Task<Void, Never>?
     static func bytes(_ value: Int) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .memory) }
     func poll() async {
         if Date().timeIntervalSince(lastSessionRefresh) > 10 {
@@ -103,6 +108,7 @@ private struct DashboardMetric: View {
     }
     func choose() { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; if panel.runModal() == .OK, let url = panel.url { path = url.path } }
     func startOnLaunch() {
+        if let icon = DashboardArtwork.icon { NSApplication.shared.applicationIconImage = icon }
         // SwiftUI may recreate a view task or open another window. Neither that,
         // nor a manual Stop, should trigger another automatic load.
         guard !startupHandled else { return }
@@ -170,7 +176,23 @@ private struct DashboardMetric: View {
         if startupRecovery.isActive { startupRecovery.cancel(); notice = "Stopping startup…"; return }
         guard !starting else { return }
         starting = true
-        Task { await worker.stop(); await server?.stop(); server = nil; running = false; starting = false; status = "Stopped"; notice = ""; loadStarted = nil; loadingMemoryProgress = nil }
+        stopTask = Task { await stopServices(); stopTask = nil }
+    }
+    private func stopServices() async {
+        await worker.stop(); await server?.stop(); server = nil; running = false
+        starting = false; status = "Stopped"; notice = ""; loadStarted = nil; loadingMemoryProgress = nil
+    }
+    func shutdown() async {
+        await startupRecovery.cancelAndWait()
+        if let stopTask { await stopTask.value } else { await stopServices() }
+    }
+    func monitor() async {
+        await poll()
+        if !automaticTestStarted, status == "Ready",
+           let flag = CommandLine.arguments.firstIndex(of: "--self-test-report"), CommandLine.arguments.indices.contains(flag + 1) {
+            automaticTestStarted = true
+            runChecks(reportURL: URL(fileURLWithPath: CommandLine.arguments[flag + 1]))
+        }
     }
     func copyToken() { guard let token else { return }; NSPasteboard.general.clearContents(); NSPasteboard.general.setString(token, forType: .string); notice = "Access token copied. Paste it into Decomposer Settings → RemoteAgent." }
     func closeSelectedSession() {
@@ -201,16 +223,36 @@ private struct DashboardMetric: View {
     }
 }
 
+@MainActor final class RemoteAgentAppDelegate: NSObject, NSApplicationDelegate {
+    let workspace = RemoteWorkspace()
+    private let lifetime = ApplicationServiceLifetime()
+    private var terminating = false
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        lifetime.launch(interval: 1, start: { [self] in workspace.startOnLaunch() }, poll: { [self] in await workspace.monitor() })
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if !terminating {
+            terminating = true
+            Task { await lifetime.shutdown { [self] in await workspace.shutdown() }; sender.reply(toApplicationShouldTerminate: true) }
+        }
+        return .terminateLater
+    }
+}
 @main struct RemoteAgentApp: App {
-    @State private var workspace = RemoteWorkspace()
+    @NSApplicationDelegateAdaptor(RemoteAgentAppDelegate.self) private var delegate
+    private var workspace: RemoteWorkspace { delegate.workspace }
     @State private var selectedTab = "Status"
     var body: some Scene {
         WindowGroup("RemoteAgent") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("RemoteAgent", systemImage: "server.rack").font(.largeTitle.bold())
+                    HStack(spacing: 10) {
+                        if let icon = DashboardArtwork.icon { Image(nsImage: icon).resizable().interpolation(.high).scaledToFit().frame(width: 44, height: 44).accessibilityHidden(true) }
+                        Text("RemoteAgent").font(.largeTitle.bold())
+                    }
                     Spacer()
-                    Text(workspace.status).font(.headline).textSelection(.enabled)
+                    Text(workspace.status).font(.headline).foregroundStyle(workspace.status == "Ready" ? Color.green : Color.primary).textSelection(.enabled)
                     if workspace.running || workspace.starting {
                         Button("Stop and unload") { workspace.stop() }
                     } else {
@@ -309,10 +351,10 @@ private struct DashboardMetric: View {
                 GroupBox("Settings") {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            TextField("Local model directory", text: $workspace.path)
+                            TextField("Local model directory", text: Binding(get: { workspace.path }, set: { workspace.path = $0 }))
                             Button("Choose…") { workspace.choose() }
                         }.disabled(workspace.running || workspace.starting)
-                        TextField("Background Prompt folder", text: $workspace.backgroundPath)
+                        TextField("Background Prompt folder", text: Binding(get: { workspace.backgroundPath }, set: { workspace.backgroundPath = $0 }))
                             .disabled(workspace.running || workspace.starting)
                             .onChange(of: workspace.backgroundPath) { _, path in UserDefaults.standard.set(path, forKey: "backgroundPath") }
                         LabeledContent("Local endpoint") { Text("http://127.0.0.1:8321").textSelection(.enabled) }
@@ -335,22 +377,11 @@ private struct DashboardMetric: View {
             }.padding(24).frame(minWidth: 820, minHeight: 480)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color.white)
+            .rememberWindowFrame("RemoteAgent.dashboard")
             .preferredColorScheme(.light)
             .confirmationDialog("Close this session and release its caches?", isPresented: Binding(get: { workspace.sessionToClose != nil }, set: { if !$0 { workspace.sessionToClose = nil } })) {
                 Button("Close session", role: .destructive) { workspace.closeSelectedSession() }
             } message: { Text("The client must create a new session when it next connects. Saved conversations and project files are not deleted.") }
-            .task {
-                workspace.startOnLaunch()
-                while !Task.isCancelled {
-                    await workspace.poll()
-                    if !workspace.automaticTestStarted, workspace.status == "Ready",
-                       let flag = CommandLine.arguments.firstIndex(of: "--self-test-report"), CommandLine.arguments.indices.contains(flag + 1) {
-                        workspace.automaticTestStarted = true
-                        workspace.runChecks(reportURL: URL(fileURLWithPath: CommandLine.arguments[flag + 1]))
-                    }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            }
         }
         .defaultSize(width: 900, height: 560)
     }

@@ -1,0 +1,14 @@
+RemoteAgent host thermal status — 2026-10-31
+
+Installed RemoteAgent build 20261031.5 and Decomposer build 20261031.8. RemoteAgent capabilities now includes optional hostThermal {state, sampledAt}, sampled directly from ProcessInfo.processInfo.thermalState on the service host. Nominal/fair/serious/critical are reported explicitly, with unknown for future OS values. No temperature, fan RPM or throttling claim is inferred. The existing authenticated capabilities path bypasses GPU admission and creates no sessions/caches.
+
+Decomposer displays RA host thermal state in Server Status through the existing visible-only 10-second refresh loop, including the host sample timestamp. Missing old-server telemetry shows Unavailable · update RemoteAgent; connection failure clears the previous sample and shows server unreachable. Unknown state remains neutral rather than nominal. The reading is not taken from the client Mac.
+
+Validation: two HarnessCore thermal mapping/compatibility tests and two authenticated RecoveryHTTPTests passed. The HTTP test requests capabilities during an active fake inference with the GPU gate occupied and verifies a fresh terminal thermal reading, no queue entry and the original generation still pending. Older capabilities without telemetry remain decodable; future thermal-state strings are handled explicitly. Both Release builds passed. Deep/strict signing verification passed for staged and installed bundles.
+
+The user stopped RemoteAgent for installation. Decomposer was idle with no investigation open before restart. Both prior app bundles were retained. The existing optimized RemoteAgent worker and Metal resources were preserved; worker SHA256 remains ad2f96fa777bdce44f5b821bb8198048bba3201b5a0ed59233fd7e70d5d9358a. This feature is implemented in the HTTP host, not the inference worker.
+
+Native UI verification after restart: Decomposer Server Status showed Reachable · authenticated and RA host thermal state Nominal · normal thermal conditions with a fresh host timestamp. The current procedure also loaded successfully from Data. Left Server Status open for the user. No batch/investigation run was started, shared project data written, or commit/push made.
+
+Decomposer executable SHA256: 9fd5dafb27580d7630cc2ac38e04169612914bb30a18a1c99c99f29fb9e20a41
+RemoteAgent host executable SHA256: 555b25508d3d8212e453ba309f3681b5f13b48a113041606df158a2f15fe7ef2

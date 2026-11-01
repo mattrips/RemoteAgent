@@ -28,6 +28,7 @@ public actor WorkerBridge {
     private var pending: [UUID: AsyncThrowingStream<RemoteAgentEvent, Error>.Continuation] = [:]
     private var deadlines: [UUID: Task<Void, Never>] = [:]
     private var cancelling = Set<UUID>()
+    private var drainWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private var pendingOperations: [UUID: String] = [:]
     public private(set) var configuration: ModelConfiguration?
     public private(set) var status = "Stopped"
@@ -70,6 +71,17 @@ public actor WorkerBridge {
     public init() {}
     public var startupInProgress: Bool { configuration == nil && status == "Loading model…" && process?.isRunning == true }
     public func hasPending(_ id: UUID) -> Bool { pending[id] != nil }
+    /// Keep the GPU queue slot until the worker confirms its terminal outcome,
+    /// or the existing isolation watchdog stops the worker. Deliberately ignores
+    /// caller cancellation: abandoning an HTTP stream does not make the GPU idle.
+    public func cancelAndDrain(_ id: UUID) async {
+        cancel(id)
+        guard pending[id] != nil || cancelling.contains(id) else { return }
+        await withCheckedContinuation { drainWaiters[id, default: []].append($0) }
+    }
+    private func finishedDraining(_ id: UUID) {
+        for waiter in drainWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
+    }
     public func start(executable: URL, model: URL) throws {
         guard process == nil else { throw HarnessError.state("Stop the existing worker before loading another model") }
         guard retiringProcess?.isRunning != true else { throw HarnessError.state("Previous inference worker is still exiting; wait before loading another model") }
@@ -116,6 +128,7 @@ public actor WorkerBridge {
         lastRequestOutcome = nil
         for value in deadlines.values { value.cancel() }; deadlines.removeAll(); cancelling.removeAll()
         for stream in pending.values { stream.finish(throwing: HarnessError.state(message)) }; pending.removeAll(); pendingOperations.removeAll()
+        for id in Array(drainWaiters.keys) { finishedDraining(id) }
     }
     private func exited(_ ticket: UUID, code: Int32, signalled: Bool) {
         guard ticket == generation else { return }
@@ -166,6 +179,7 @@ public actor WorkerBridge {
                     pending.removeValue(forKey: event.requestID)?.finish(); deadlines.removeValue(forKey: event.requestID)?.cancel(); requestStartedAt = nil; activeSessionID = nil
                     if event.kind == "error" { lastRequestOutcome = event.errorCode == "cancelled" ? "Cancelled" : event.errorCode == RepetitionDetectionError.code ? "Repetition detected" : "Failed" }
                     else if wasCancelling { lastRequestOutcome = "Completed before cancellation" }
+                    finishedDraining(event.requestID)
                 }
             } else if event.terminal, cancelling.remove(event.requestID) != nil {
                 deadlines.removeValue(forKey: event.requestID)?.cancel()
@@ -173,6 +187,7 @@ public actor WorkerBridge {
                 activeSessionID = nil
                 liveDecodeRate = LiveDecodeRate()
                 lastRequestOutcome = "Cancelled"
+                finishedDraining(event.requestID)
             }
         }
     }

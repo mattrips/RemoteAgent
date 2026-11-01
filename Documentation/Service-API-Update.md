@@ -105,3 +105,8 @@ required to deploy; rebuilding cannot change an already-running process.
 Ray's initial UI still imports a background file and marks lost streams incomplete.
 The server endpoints are now available for a later client integration; capability
 negotiation does not automatically enable UI features that have not been wired up.
+
+
+## Host thermal status
+
+The authenticated capabilities response includes optional hostThermal {state, sampledAt}, sampled from ProcessInfo.processInfo.thermalState in the RemoteAgent service process. States are nominal, fair, serious, critical or unknown. This is OS thermal pressure, not temperature, fan RPM or proof of throttling. Sampling never enters the GPU gate, creates sessions/caches or changes workload policy. Missing telemetry from an older server and unreachable-server readings must display unavailable rather than nominal. Decomposer uses its existing visible-only 10-second Server Status polling and clears old samples on failure. Optional fields preserve older client/worker interoperability.

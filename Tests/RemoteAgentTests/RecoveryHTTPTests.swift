@@ -39,6 +39,14 @@ for line in sys.stdin:
             let active = RemoteAgentRequest("generate"), queued = RemoteAgentRequest("generate")
             let first = Task { try await rpc(active) }
             for _ in 0..<100 { if await worker.hasPending(active.id) { break }; try await Task.sleep(for: .milliseconds(10)) }
+            let sampledAfter = Date()
+            let thermalProbe = try await rpc(.init("capabilities"))
+            let thermal = try #require(thermalProbe.last?.capabilities?.hostThermal)
+            #expect(["nominal", "fair", "serious", "critical", "unknown"].contains(thermal.state))
+            #expect(thermal.sampledAt >= sampledAfter && thermal.sampledAt <= Date())
+            #expect(thermalProbe.last?.terminal == true)
+            #expect(await server.queueCount() == 0)
+            #expect(await worker.hasPending(active.id))
             let second = Task { try await rpc(queued) }
             for _ in 0..<100 { if await server.queueCount() == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
             var cancel = RemoteAgentRequest("cancel"); cancel.targetID = queued.id

@@ -55,6 +55,18 @@ for line in sys.stdin:
             let deferred = try await call(warm)
             #expect(deferred.text == "deferred")
             #expect(await server.queueCount() == 0)
+            for operation in ["configuration", "session.create", "tokenize", "cache.inspect", "cache.prefill"] {
+                var prepare = RemoteAgentRequest(operation); prepare.opportunistic = true
+                let deferredPreparation = try await call(prepare)
+                #expect(deferredPreparation.text == "deferred")
+                #expect(await server.queueCount() == 0)
+            }
+            var invalid = RemoteAgentRequest("generate"); invalid.opportunistic = true
+            #expect(throws: (any Error).self) { try invalid.validate() }
+            var countOnly = RemoteAgentRequest("tokenize"); countOnly.countOnly = true
+            try countOnly.validate()
+            countOnly.operation = "generate"
+            #expect(throws: (any Error).self) { try countOnly.validate() }
             var cancel = RemoteAgentRequest("cancel"); cancel.targetID = active.id
             _ = try await call(cancel); _ = try await pending.value
             var close = RemoteAgentRequest("session.close"); close.sessionID = UUID()
