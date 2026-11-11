@@ -1,5 +1,10 @@
 # Native macOS icon layout — 2026-10-31
 
+Update 2026-11-10: Tools/make_icon.swift now draws the chip/network motif using
+native vector paths, flat navy #032457 and a flat white plate, matching Data's
+updated palette. This supersedes the original raster source/export below while
+retaining its size grid and margins. All exports use explicit sRGB.
+
 The original artwork is preserved. Native export now uses a transparent canvas,
 an inset rounded plate, and optically adjusted small-size variants. At 1024px the
 visible plate is 824px with 100px margins; 512/256/128/64/32/16 sizes use the

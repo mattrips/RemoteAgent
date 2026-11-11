@@ -8,6 +8,7 @@ import ServiceKit
 
 @MainActor private enum DashboardArtwork {
     static let icon: NSImage? = Bundle.main.url(forResource: "RemoteAgent", withExtension: "icns").flatMap { NSImage(contentsOf: $0) }
+    static let headerIcon: NSImage? = Bundle.main.url(forResource: "RemoteAgent-macOS", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
 }
 
 private struct DashboardMetric: View {
@@ -248,7 +249,7 @@ private struct DashboardMetric: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     HStack(spacing: 10) {
-                        if let icon = DashboardArtwork.icon { Image(nsImage: icon).resizable().interpolation(.high).scaledToFit().frame(width: 44, height: 44).accessibilityHidden(true) }
+                        if let icon = DashboardArtwork.headerIcon { Image(nsImage: icon).resizable().interpolation(.high).scaledToFit().frame(width: 44, height: 44).accessibilityHidden(true) }
                         Text("RemoteAgent").font(.largeTitle.bold())
                     }
                     Spacer()

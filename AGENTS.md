@@ -105,6 +105,11 @@ The Inference stage value is green when Idle; the generated-token value is green
 only while Decoding. Other states and completed counts use the primary text color.
 The dashboard uses an explicit white background and light color scheme, matching
 Data, rather than the default gray window background.
+The app/header icon is the navy-on-white inference chip. Regenerate its master,
+ICNS and asset-catalog variants together with Tools/make_icon.swift; use the same
+#032457 navy and macOS optical grid as Data, Retriever and Orchestrator.
+The dashboard header loads RemoteAgent-macOS.png directly; include that PNG in
+the native resource phase and staged bundles. Dock artwork remains the ICNS.
 
 `RemoteAgentService/ActivityLog.swift` owns a bounded, memory-only metadata log
 (latest 1,000 entries). WorkerBridge records request queue/start/completion,
