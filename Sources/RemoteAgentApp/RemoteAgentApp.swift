@@ -404,19 +404,20 @@ struct RemoteActivityView: View {
                 Picker("Show", selection: $category) {
                     ForEach(["All", "Request", "Connection", "Error", "Service"], id: \.self) { Text($0).tag($0) }
                 }.frame(width: 220)
-                TextField("Filter client, operation, ID or error code", text: $query)
+                TextField("Filter client, computer, operation, ID or error code", text: $query)
                 Button("Clear completed entries") { Task { await workspace.worker.clearActivity(); await workspace.poll() } }
             }
             Text("Latest 1,000 operational entries, kept only while this app is open. Client sessions are logical connections; routine HTTP/status polling is omitted. Prompt text, output and access tokens are not logged.").font(.caption).foregroundStyle(.secondary)
             Table(rows, selection: $selection) {
                 TableColumn("Time") { row in Text(row.time.formatted(date: .omitted, time: .standard)).monospacedDigit() }.width(85)
                 TableColumn("Type", value: \.category).width(85)
-                TableColumn("Client", value: \.client)
+                TableColumn("Client / Computer") { row in Text(row.client).help(row.client) }
                 TableColumn("Operation", value: \.operation)
                 TableColumn("Status", value: \.status).width(100)
             }.frame(minHeight: 220)
             if let row = workspace.activityRecords.first(where: { $0.id == selection }) {
                 VStack(alignment: .leading, spacing: 4) {
+                    Text("Client / Computer: " + row.client)
                     if let id = row.requestID { Text("Request: " + id.uuidString).font(.caption.monospaced()) }
                     if let id = row.sessionID { Text("Session: " + id.uuidString).font(.caption.monospaced()) }
                     if let start = row.startedAt { Text("Execution: " + String(format: "%.2f s", max(0, (row.endedAt ?? Date()).timeIntervalSince(start)))).monospacedDigit() }

@@ -119,6 +119,9 @@ inference cancellation because recovery can continue after transport loss.
 Normal short-lived HTTP connections and routine status polling must not flood it.
 The host polls once per second; never add a Task or UI update for every token.
 
+Log entries use client · device labels for requests, failures and session connections,
+with missing request identity filled from its session. Transport drops reuse the
+tracked request identity. These are client-reported names, not verified host identity.
 Log entries expose client/device labels, request/session IDs, operation, outcome,
 time and token counts. Never retain prompt text, output, raw token IDs, credentials,
 headers or raw error messages in this log. Errors use bounded codes; full diagnostics

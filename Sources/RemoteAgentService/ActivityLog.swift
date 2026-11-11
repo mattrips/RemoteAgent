@@ -27,8 +27,31 @@ struct RemoteActivityLog {
     static func label(_ text: String, limit: Int = 100) -> String {
         String(text.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }.prefix(limit))
     }
+    /// Identity comes from client metadata, with session metadata filling omissions.
+    static func clientLabel(clientName: String?, deviceName: String?) -> String {
+        func component(_ value: String?) -> String? {
+            guard let value else { return nil }
+            let cleaned = label(value, limit: 120).trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? nil : cleaned
+        }
+        let client = component(clientName) ?? "Unknown client"
+        return client + (component(deviceName).map { " · " + $0 } ?? "")
+    }
+    static func clientLabel(for request: RemoteAgentRequest, sessions: [RemoteSessionInfo]) -> String {
+        let session = sessions.first { $0.id == request.sessionID }
+        func nonblank(_ value: String?) -> String? {
+            guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return value
+        }
+        return clientLabel(clientName: nonblank(request.clientName) ?? session?.clientName,
+                           deviceName: nonblank(request.deviceName) ?? session?.deviceName)
+    }
+    mutating func transportDropped(_ id: UUID) {
+        let request = records.last { $0.category == "Request" && $0.requestID == id }
+        add(category: "Connection", client: request?.client ?? "Unknown client", operation: "transport", status: "Dropped", requestID: id, sessionID: request?.sessionID, detail: "Transport closed before its response completed. Inference may continue; recover using the original request ID.")
+    }
     mutating func add(category: String, client: String = "Host", operation: String, status: String, requestID: UUID? = nil, sessionID: UUID? = nil, errorCode: String? = nil, detail: String = "", at: Date = Date()) {
-        records.append(.init(id: UUID(), time: at, category: category, client: Self.label(client), operation: Self.label(operation), status: status, requestID: requestID, sessionID: sessionID, errorCode: errorCode.map { Self.label($0, limit: 64) }, detail: detail))
+        records.append(.init(id: UUID(), time: at, category: category, client: Self.label(client, limit: 243), operation: Self.label(operation), status: status, requestID: requestID, sessionID: sessionID, errorCode: errorCode.map { Self.label($0, limit: 64) }, detail: detail))
         while records.count > Self.capacity {
             let index = records.firstIndex { $0.category != "Request" || $0.endedAt != nil } ?? 0
             records.remove(at: index)
@@ -64,10 +87,10 @@ struct RemoteActivityLog {
     mutating func sessionsChanged(from old: [RemoteSessionInfo], to new: [RemoteSessionInfo], at: Date = Date()) {
         let before = Set(old.map(\.id)), after = Set(new.map(\.id))
         for session in new where !before.contains(session.id) {
-            add(category: "Connection", client: session.clientName + (session.deviceName.map { " · " + $0 } ?? ""), operation: "session", status: "Connected", sessionID: session.id, at: at)
+            add(category: "Connection", client: Self.clientLabel(clientName: session.clientName, deviceName: session.deviceName), operation: "session", status: "Connected", sessionID: session.id, at: at)
         }
         for session in old where !after.contains(session.id) {
-            add(category: "Connection", client: session.clientName + (session.deviceName.map { " · " + $0 } ?? ""), operation: "session", status: "Disconnected", sessionID: session.id, detail: "Session closed, expired, evicted, superseded or invalidated with its worker.", at: at)
+            add(category: "Connection", client: Self.clientLabel(clientName: session.clientName, deviceName: session.deviceName), operation: "session", status: "Disconnected", sessionID: session.id, detail: "Session closed, expired, evicted, superseded or invalidated with its worker.", at: at)
         }
     }
     mutating func clear() { records.removeAll { $0.category != "Request" || $0.endedAt != nil } }

@@ -4,6 +4,40 @@ import HarnessCore
 @testable import RemoteAgentService
 
 struct ActivityLogTests {
+    @Test func requestIdentityUsesDeviceMetadataAndSessionFallback() {
+        let session = RemoteSessionInfo(id: UUID(), clientName: "Decomposer", deviceName: "Office Mac")
+        var request = RemoteAgentRequest("generate")
+        request.sessionID = session.id
+        #expect(RemoteActivityLog.clientLabel(for: request, sessions: [session]) == "Decomposer · Office Mac")
+        request.clientName = "Ray"
+        #expect(RemoteActivityLog.clientLabel(for: request, sessions: [session]) == "Ray · Office Mac")
+        request.deviceName = "Laptop"
+        #expect(RemoteActivityLog.clientLabel(for: request, sessions: [session]) == "Ray · Laptop")
+        request.clientName = " "; request.deviceName = " "
+        #expect(RemoteActivityLog.clientLabel(for: request, sessions: [session]) == "Decomposer · Office Mac")
+        request.sessionID = UUID()
+        #expect(RemoteActivityLog.clientLabel(for: request, sessions: [session]) == "Unknown client")
+        #expect(RemoteActivityLog.clientLabel(clientName: "Ray\n", deviceName: "Mac\u{0000}") == "Ray · Mac")
+    }
+    @Test func longNamesRetainDeviceAndSessionConnectionsUseSameLabel() throws {
+        let name = String(repeating: "A", count: 120)
+        let session = RemoteSessionInfo(id: UUID(), clientName: name, deviceName: "Office Mac")
+        var log = RemoteActivityLog()
+        log.sessionsChanged(from: [], to: [session])
+        log.sessionsChanged(from: [session], to: [])
+        #expect(log.records.map(\.client) == [name + " · Office Mac", name + " · Office Mac"])
+    }
+    @Test func bridgeFailuresAndTransportDropsRetainRequestComputer() async throws {
+        let bridge = WorkerBridge()
+        var request = RemoteAgentRequest("generate")
+        request.clientName = "Decomposer"; request.deviceName = "Office Mac"; request.sessionID = UUID()
+        await bridge.recordQueuedRequest(request)
+        await bridge.recordRequestFailure(request, code: "busy")
+        await bridge.recordTransportDrop(request.id)
+        let rows = await bridge.activityRecords
+        #expect(rows.count == 3)
+        #expect(rows.allSatisfy { $0.client == "Decomposer · Office Mac" && $0.sessionID == request.sessionID })
+    }
     @Test func requestLifecycleRetainsOnlyMetadataAndDeduplicatesErrors() throws {
         var log = RemoteActivityLog(), request = RemoteAgentRequest("generate")
         request.tokens = [9901, 9902]; request.clientName = "Client"

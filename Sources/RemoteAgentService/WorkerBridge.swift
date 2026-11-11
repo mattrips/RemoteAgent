@@ -60,14 +60,14 @@ public actor WorkerBridge {
     public var activityRecords: [RemoteActivityRecord] { activity.records }
     public func clearActivity() { activity.clear() }
     public func recordQueuedRequest(_ request: RemoteAgentRequest) {
-        activity.begin(request, client: request.clientName ?? sessions.first(where: { $0.id == request.sessionID })?.clientName ?? "Unknown client", running: false)
+        activity.begin(request, client: RemoteActivityLog.clientLabel(for: request, sessions: sessions), running: false)
     }
     public func recordRequestFailure(_ request: RemoteAgentRequest, code: String) {
-        activity.begin(request, client: request.clientName ?? sessions.first(where: { $0.id == request.sessionID })?.clientName ?? "Unknown client", running: false)
+        activity.begin(request, client: RemoteActivityLog.clientLabel(for: request, sessions: sessions), running: false)
         activity.finish(.failure(request.id, code: code, message: ""))
     }
     public func recordServiceError(_ code: String) { activity.add(category: "Error", operation: "service", status: "Failed", errorCode: code) }
-    public func recordTransportDrop(_ id: UUID) { activity.add(category: "Connection", client: "HTTP client", operation: "transport", status: "Dropped", requestID: id, detail: "Transport closed before its response completed. Inference may continue; recover using the original request ID.") }
+    public func recordTransportDrop(_ id: UUID) { activity.transportDropped(id) }
     public init() {}
     public var startupInProgress: Bool { configuration == nil && status == "Loading model…" && process?.isRunning == true }
     public func hasPending(_ id: UUID) -> Bool { pending[id] != nil }
@@ -194,7 +194,7 @@ public actor WorkerBridge {
     public func stream(_ request: RemoteAgentRequest) throws -> AsyncThrowingStream<RemoteAgentEvent, Error> {
         guard configuration != nil, process?.isRunning == true else { throw HarnessError.state("worker_unavailable: " + status) }
         guard pending.isEmpty, cancelling.isEmpty else { throw HarnessError.state("busy: only one GPU request may run; cancellation may still be draining") }
-        activity.begin(request, client: request.clientName ?? sessions.first(where: { $0.id == request.sessionID })?.clientName ?? "Unknown client", running: true)
+        activity.begin(request, client: RemoteActivityLog.clientLabel(for: request, sessions: sessions), running: true)
         let pair = AsyncThrowingStream<RemoteAgentEvent, Error>.makeStream(bufferingPolicy: .bufferingOldest(256))
         if !["status", "configuration", "session.create", "session.close", "cache.inspect", "cache.release"].contains(request.operation) {
             requestStartedAt = Date(); generatedTokens = 0; prefillCompletedTokens = nil; prefillTotalTokens = nil
